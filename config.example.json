@@ -1,0 +1,18 @@
+{
+    "telegram_bot_token": "PASTE_YOUR_BOT_TOKEN",
+    "telegram_chat_id": "PASTE_YOUR_CHAT_ID",
+    "intraday_alerts": {
+        "default_threshold_pct": 2.0,
+        "thresholds": {
+            "gold_gbp": 1.5,
+            "iswd": 2.0,
+            "hbks": 2.0
+        }
+    },
+    "price_alerts": {
+        "gold_gbp": {
+            "above": 2200.00,
+            "below": 1800.00
+        }
+    }
+}
