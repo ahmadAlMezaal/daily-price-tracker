@@ -35,25 +35,29 @@ ASSETS = {
     "gold_gbp": {
         "ticker": "GC=F",
         "name": "Gold",
-        "currency": "USD",
-        "convert_to_gbp": True,
-        "pence_to_pounds": False,
+        "emoji": "🥇",
+        "native_currency": "USD",
+        "unit": "per oz",
     },
     "iswd": {
         "ticker": "ISWD.L",
         "name": "ISWD",
-        "currency": "GBP",
-        "convert_to_gbp": False,
-        "pence_to_pounds": True,
+        "emoji": "📈",
+        "native_currency": "GBP",
+        "unit": "",
     },
     "hbks": {
         "ticker": "HBKS.L",
         "name": "HBKS",
-        "currency": "GBP",
-        "convert_to_gbp": False,
-        "pence_to_pounds": True,
+        "emoji": "📊",
+        "native_currency": "GBP",
+        "unit": "",
     },
 }
+
+# LSE tickers that are known to be quoted in pence (not pounds)
+# If raw value > 100, assume pence and divide by 100
+PENCE_THRESHOLD = 100
 
 # History retention
 HISTORY_DAYS = 90
@@ -144,9 +148,10 @@ def get_asset_price(
 ) -> dict | None:
     """
     Fetch current price for an asset.
-    Returns dict with price_gbp, open_gbp, prev_close_gbp, or None on failure.
+    Returns dict with prices in both GBP and USD, or None on failure.
     """
     ticker_symbol = asset_config["ticker"]
+    native_currency = asset_config["native_currency"]
 
     try:
         ticker = yf.Ticker(ticker_symbol)
@@ -156,34 +161,60 @@ def get_asset_price(
             logger.error(f"No data returned for {ticker_symbol}")
             return None
 
-        current_price = float(data["Close"].iloc[-1])
-        open_price = float(data["Open"].iloc[-1])
+        current_raw = float(data["Close"].iloc[-1])
+        open_raw = float(data["Open"].iloc[-1])
 
         # Get previous close if available
         if len(data) > 1:
-            prev_close = float(data["Close"].iloc[-2])
+            prev_close_raw = float(data["Close"].iloc[-2])
         else:
-            prev_close = open_price
+            prev_close_raw = open_raw
 
-        # Convert to GBP if needed
-        if asset_config["convert_to_gbp"]:
+        # Smart pence detection for LSE tickers
+        # If the ticker ends in .L and raw value > 100, it's likely in pence
+        if ticker_symbol.endswith(".L") and current_raw > PENCE_THRESHOLD:
+            logger.debug(f"{ticker_symbol} raw value {current_raw} > {PENCE_THRESHOLD}, converting from pence to pounds")
+            current_raw = current_raw / 100
+            open_raw = open_raw / 100
+            prev_close_raw = prev_close_raw / 100
+
+        # Calculate prices in both currencies
+        if native_currency == "USD":
+            # Native is USD, convert to GBP
+            price_usd = current_raw
+            open_usd = open_raw
+            prev_close_usd = prev_close_raw
+
             if gbp_usd_rate is None:
                 logger.error(f"Cannot convert {ticker_symbol} to GBP - no exchange rate")
                 return None
-            current_price = current_price / gbp_usd_rate
-            open_price = open_price / gbp_usd_rate
-            prev_close = prev_close / gbp_usd_rate
 
-        # Convert pence to pounds if needed
-        if asset_config["pence_to_pounds"]:
-            current_price = current_price / 100
-            open_price = open_price / 100
-            prev_close = prev_close / 100
+            price_gbp = price_usd / gbp_usd_rate
+            open_gbp = open_usd / gbp_usd_rate
+            prev_close_gbp = prev_close_usd / gbp_usd_rate
+
+        else:  # native_currency == "GBP"
+            # Native is GBP, convert to USD
+            price_gbp = current_raw
+            open_gbp = open_raw
+            prev_close_gbp = prev_close_raw
+
+            if gbp_usd_rate is not None:
+                price_usd = price_gbp * gbp_usd_rate
+                open_usd = open_gbp * gbp_usd_rate
+                prev_close_usd = prev_close_gbp * gbp_usd_rate
+            else:
+                price_usd = None
+                open_usd = None
+                prev_close_usd = None
 
         return {
-            "price_gbp": current_price,
-            "open_gbp": open_price,
-            "prev_close_gbp": prev_close,
+            "price_gbp": price_gbp,
+            "open_gbp": open_gbp,
+            "prev_close_gbp": prev_close_gbp,
+            "price_usd": price_usd,
+            "open_usd": open_usd,
+            "prev_close_usd": prev_close_usd,
         }
 
     except Exception as e:
@@ -274,16 +305,21 @@ def save_alerts_state(state: dict) -> None:
         json.dump(state, f, indent=2)
 
 
-def format_price(price: float) -> str:
+def format_price_gbp(price: float) -> str:
     """Format price in GBP."""
     return f"£{price:,.2f}"
+
+
+def format_price_usd(price: float) -> str:
+    """Format price in USD."""
+    return f"${price:,.2f}"
 
 
 def format_change(change: float, change_pct: float) -> str:
     """Format price change with indicator."""
     indicator = "🟢" if change >= 0 else "🔴"
     sign = "+" if change >= 0 else ""
-    return f"{indicator} {sign}{format_price(change)} ({sign}{change_pct:.2f}%)"
+    return f"{indicator} {sign}{format_price_gbp(change)} ({sign}{change_pct:.2f}%)"
 
 
 def format_trend(trend: float | None, label: str) -> str:
@@ -322,17 +358,36 @@ def cmd_summary(config: dict, logger: logging.Logger) -> None:
             lines.append("")
             continue
 
-        current = price_data["price_gbp"]
-        prev_close = price_data["prev_close_gbp"]
-        prices[asset_key] = current
+        current_gbp = price_data["price_gbp"]
+        current_usd = price_data["price_usd"]
+        prev_close_gbp = price_data["prev_close_gbp"]
+        prices[asset_key] = current_gbp
 
-        # Daily change
-        daily_change = current - prev_close
-        daily_change_pct = (daily_change / prev_close) * 100 if prev_close != 0 else 0
+        # Daily change (in GBP)
+        daily_change = current_gbp - prev_close_gbp
+        daily_change_pct = (daily_change / prev_close_gbp) * 100 if prev_close_gbp != 0 else 0
 
-        lines.append(f"*{asset_config['name']}*")
-        lines.append(f"Price: {format_price(current)}")
-        lines.append(format_change(daily_change, daily_change_pct))
+        # Format header with emoji
+        emoji = asset_config.get("emoji", "📊")
+        unit = asset_config.get("unit", "")
+        unit_suffix = f" {unit}" if unit else ""
+
+        lines.append(f"{emoji} *{asset_config['name']}*")
+
+        # Show prices in both currencies
+        # Native currency first (USD for gold, GBP for ETFs)
+        if asset_config["native_currency"] == "USD":
+            # Gold: show USD first, then GBP
+            price_line = f"   {format_price_gbp(current_gbp)} / {format_price_usd(current_usd)}{unit_suffix}"
+        else:
+            # ETFs: show GBP first, then USD
+            if current_usd is not None:
+                price_line = f"   {format_price_gbp(current_gbp)} / {format_price_usd(current_usd)}{unit_suffix}"
+            else:
+                price_line = f"   {format_price_gbp(current_gbp)}{unit_suffix}"
+
+        lines.append(price_line)
+        lines.append(f"   {format_change(daily_change, daily_change_pct)}")
 
         # Weekly trend (5 trading days)
         weekly = calculate_trend(history, asset_key, 5)
@@ -344,7 +399,7 @@ def cmd_summary(config: dict, logger: logging.Logger) -> None:
                 trends.append(format_trend(weekly, "5d"))
             if monthly is not None:
                 trends.append(format_trend(monthly, "22d"))
-            lines.append(" | ".join(trends))
+            lines.append(f"   {' | '.join(trends)}")
 
         lines.append("")
 
@@ -410,8 +465,8 @@ def cmd_watch(config: dict, logger: logging.Logger) -> None:
                     direction = "📈 SPIKE" if change_pct > 0 else "📉 DIP"
                     alerts_to_send.append(
                         f"{direction}: *{asset_config['name']}*\n"
-                        f"Current: {format_price(current)}\n"
-                        f"Open: {format_price(open_price)}\n"
+                        f"Current: {format_price_gbp(current)}\n"
+                        f"Open: {format_price_gbp(open_price)}\n"
                         f"Change: {change_pct:+.2f}% (threshold: ±{threshold}%)"
                     )
                     state["fired"].append(alert_key)
@@ -425,8 +480,8 @@ def cmd_watch(config: dict, logger: logging.Logger) -> None:
             alert_key = f"price_above_{asset_key}"
             if alert_key not in state["fired"]:
                 alerts_to_send.append(
-                    f"🔔 *{asset_config['name']}* above {format_price(above)}!\n"
-                    f"Current: {format_price(current)}"
+                    f"🔔 *{asset_config['name']}* above {format_price_gbp(above)}!\n"
+                    f"Current: {format_price_gbp(current)}"
                 )
                 state["fired"].append(alert_key)
                 logger.info(f"Alert triggered: {alert_key}")
@@ -436,8 +491,8 @@ def cmd_watch(config: dict, logger: logging.Logger) -> None:
             alert_key = f"price_below_{asset_key}"
             if alert_key not in state["fired"]:
                 alerts_to_send.append(
-                    f"🔔 *{asset_config['name']}* below {format_price(below)}!\n"
-                    f"Current: {format_price(current)}"
+                    f"🔔 *{asset_config['name']}* below {format_price_gbp(below)}!\n"
+                    f"Current: {format_price_gbp(current)}"
                 )
                 state["fired"].append(alert_key)
                 logger.info(f"Alert triggered: {alert_key}")
