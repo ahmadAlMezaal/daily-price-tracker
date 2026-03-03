@@ -6,13 +6,18 @@
         "thresholds": {
             "gold_gbp": 1.5,
             "iswd": 2.0,
-            "hbks": 2.0
+            "hbks": 2.0,
+            "gbpusd": 1.0
         }
     },
     "price_alerts": {
         "gold_gbp": {
             "above": 2200.00,
             "below": 1800.00
+        },
+        "gbpusd": {
+            "above": 1.40,
+            "below": 1.25
         }
     }
 }
