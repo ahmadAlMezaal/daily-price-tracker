@@ -7,6 +7,7 @@ A Python-based investment tracker that sends daily summaries and intraday spike/
 - **Daily Summary**: Prices in GBP, daily/weekly/monthly trends
 - **Intraday Alerts**: Notifications when assets or GBP/USD move beyond configurable thresholds
 - **Price Alerts**: Notifications when assets cross absolute price levels
+- **Market Sentiment**: VIX volatility index shown in daily summary with human-readable labels (calm / normal / elevated fear / high fear)
 - **Deduplication**: Won't spam you with the same alert multiple times per day
 
 ## Tracked Assets
@@ -210,6 +211,8 @@ Brent Crude
 £57.12 / $72.30 per bbl
 🔴 -£0.85 (-1.47%)
 5d: -2.10% | 22d: +0.95%
+
+🌡️ Market Sentiment: VIX 18.3 (Normal)
 
 GBP/USD: 1.2650
 ```

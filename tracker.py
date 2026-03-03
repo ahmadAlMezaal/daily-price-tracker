@@ -131,6 +131,40 @@ def send_telegram_message(config: dict, message: str, logger: logging.Logger) ->
         return False
 
 
+VIX_LABELS = [
+    (12, "Low volatility (calm)"),
+    (20, "Normal"),
+    (30, "Elevated fear"),
+    (float("inf"), "High fear"),
+]
+
+
+def get_vix(logger: logging.Logger) -> float | None:
+    """Fetch the current VIX level."""
+    try:
+        ticker = yf.Ticker("^VIX")
+        data = ticker.history(period="1d")
+        if data.empty:
+            logger.debug("No data returned for ^VIX")
+            return None
+        value = float(data["Close"].iloc[-1])
+        logger.debug(f"VIX: {value:.2f}")
+        return value
+    except Exception as e:
+        logger.debug(f"Failed to fetch VIX: {e}")
+        return None
+
+
+def format_vix(value: float) -> str:
+    """Format VIX value with a human-readable sentiment label."""
+    label = "Unknown"
+    for threshold, lbl in VIX_LABELS:
+        if value < threshold:
+            label = lbl
+            break
+    return f"🌡️ Market Sentiment: VIX {value:.1f} ({label})"
+
+
 def get_gbp_usd_rate(logger: logging.Logger) -> dict | None:
     """Fetch the current GBP/USD exchange rate with open price."""
     try:
@@ -410,6 +444,12 @@ def cmd_summary(config: dict, logger: logging.Logger) -> None:
                 trends.append(format_trend(monthly, "22d"))
             lines.append(f"   {' | '.join(trends)}")
 
+        lines.append("")
+
+    # VIX sentiment
+    vix = get_vix(logger)
+    if vix is not None:
+        lines.append(format_vix(vix))
         lines.append("")
 
     # Exchange rate
