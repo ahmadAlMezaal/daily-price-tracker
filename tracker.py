@@ -569,6 +569,179 @@ def cmd_watch(config: dict, logger: logging.Logger) -> None:
         logger.info("No new alerts to send")
 
 
+def _alert_key_to_human(alert_key: str) -> tuple[str, str]:
+    """Convert an alert key to (emoji, human-readable name).
+
+    Examples:
+        intraday_gold_gbp_+ → ("📈", "Gold spike")
+        intraday_brent_-    → ("📉", "Brent Crude dip")
+        price_above_gbpusd  → ("🔔", "GBP/USD above")
+    """
+    # Intraday alerts: intraday_{asset_key}_{+/-}
+    if alert_key.startswith("intraday_"):
+        rest = alert_key[len("intraday_"):]
+        if rest.endswith("_+"):
+            direction_word = "spike"
+            emoji = "📈"
+            asset_part = rest[:-2]
+        elif rest.endswith("_-"):
+            direction_word = "dip"
+            emoji = "📉"
+            asset_part = rest[:-2]
+        else:
+            return ("🔔", alert_key)
+
+        if asset_part == "gbpusd":
+            name = "GBP/USD"
+        elif asset_part in ASSETS:
+            name = ASSETS[asset_part]["name"]
+        else:
+            name = asset_part
+        return (emoji, f"{name} {direction_word}")
+
+    # Price alerts: price_above_{asset_key} / price_below_{asset_key}
+    if alert_key.startswith("price_above_"):
+        asset_part = alert_key[len("price_above_"):]
+        word = "above"
+    elif alert_key.startswith("price_below_"):
+        asset_part = alert_key[len("price_below_"):]
+        word = "below"
+    else:
+        return ("🔔", alert_key)
+
+    if asset_part == "gbpusd":
+        name = "GBP/USD"
+    elif asset_part in ASSETS:
+        name = ASSETS[asset_part]["name"]
+    else:
+        name = asset_part
+    return ("🔔", f"{name} {word}")
+
+
+def cmd_digest(config: dict, logger: logging.Logger) -> None:
+    """Generate and send weekly digest summary."""
+    logger.info("Generating weekly digest...")
+
+    now = datetime.now(LONDON_TZ)
+    # Calculate Monday-Friday of the current week
+    monday = now - timedelta(days=now.weekday())
+    friday = monday + timedelta(days=4)
+    mon_str = monday.strftime("%Y-%m-%d")
+    fri_str = friday.strftime("%Y-%m-%d")
+
+    # Load history and filter to this week
+    history = load_history()
+    week_entries = [
+        e for e in history.get("entries", [])
+        if mon_str <= e["date"] <= fri_str
+    ]
+    week_entries.sort(key=lambda x: x["date"])
+
+    lines = ["📊 *Weekly Digest*"]
+    lines.append(f"_Week of {monday.strftime('%d %b')} - {friday.strftime('%d %b %Y')}_")
+    lines.append("")
+
+    if not week_entries:
+        lines.append("No trading data available this week")
+    else:
+        for asset_key, asset_config in ASSETS.items():
+            emoji = asset_config.get("emoji", "📊")
+            name = asset_config["name"]
+
+            # Collect days with data for this asset
+            asset_days = [
+                e for e in week_entries
+                if asset_key in e.get("prices", {})
+                and e["prices"][asset_key] is not None
+            ]
+
+            if len(asset_days) < 2:
+                lines.append(f"{emoji} *{name}*")
+                lines.append("  Insufficient data")
+                lines.append("")
+                continue
+
+            week_open = asset_days[0]["prices"][asset_key]
+            week_close = asset_days[-1]["prices"][asset_key]
+            weekly_pct = ((week_close - week_open) / week_open) * 100 if week_open != 0 else 0
+            week_indicator = "🟢" if weekly_pct >= 0 else "🔴"
+            sign = "+" if weekly_pct >= 0 else ""
+
+            # Best / worst day (day-over-day changes)
+            best_day = None
+            worst_day = None
+            best_pct = float("-inf")
+            worst_pct = float("inf")
+
+            for i in range(1, len(asset_days)):
+                prev_price = asset_days[i - 1]["prices"][asset_key]
+                curr_price = asset_days[i]["prices"][asset_key]
+                if prev_price == 0:
+                    continue
+                day_pct = ((curr_price - prev_price) / prev_price) * 100
+                day_date = datetime.strptime(asset_days[i]["date"], "%Y-%m-%d")
+                day_abbr = day_date.strftime("%a")
+
+                if day_pct > best_pct:
+                    best_pct = day_pct
+                    best_day = day_abbr
+                if day_pct < worst_pct:
+                    worst_pct = day_pct
+                    worst_day = day_abbr
+
+            lines.append(f"{emoji} *{name}*")
+            lines.append(
+                f"  Open: {format_price_gbp(week_open)} → Close: {format_price_gbp(week_close)}"
+            )
+            lines.append(f"  Week: {week_indicator} {sign}{weekly_pct:.2f}%")
+
+            if best_day and worst_day:
+                lines.append(
+                    f"  Best day: {best_day} ({'+' if best_pct >= 0 else ''}{best_pct:.1f}%)"
+                    f" | Worst: {worst_day} ({'+' if worst_pct >= 0 else ''}{worst_pct:.1f}%)"
+                )
+            lines.append("")
+
+    # --- Alerts summary from log file ---
+    DAY_ABBRS = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
+    alert_items: list[tuple[str, str, str]] = []  # (emoji, label, day_abbr)
+
+    if LOG_PATH.exists():
+        try:
+            with open(LOG_PATH) as f:
+                for line in f:
+                    if "Alert triggered: " not in line:
+                        continue
+                    # Format: 2026-03-03 14:30:00,000 - INFO - Alert triggered: key
+                    parts = line.strip().split(" - ", 2)
+                    if len(parts) < 3:
+                        continue
+                    timestamp_str = parts[0].strip()
+                    try:
+                        log_date = datetime.strptime(
+                            timestamp_str[:10], "%Y-%m-%d"
+                        )
+                    except ValueError:
+                        continue
+                    log_date_str = log_date.strftime("%Y-%m-%d")
+                    if not (mon_str <= log_date_str <= fri_str):
+                        continue
+                    alert_key = parts[2].strip().removeprefix("Alert triggered: ").strip()
+                    day_abbr = DAY_ABBRS.get(log_date.weekday(), "?")
+                    emoji_a, label = _alert_key_to_human(alert_key)
+                    alert_items.append((emoji_a, label, day_abbr))
+        except OSError:
+            pass
+
+    lines.append(f"_Alerts fired this week: {len(alert_items)}_")
+    for emoji_a, label, day_abbr in alert_items:
+        lines.append(f"  {emoji_a} {label} ({day_abbr})")
+
+    message = "\n".join(lines)
+    logger.debug(f"Digest message:\n{message}")
+    send_telegram_message(config, message, logger)
+
+
 def cmd_test(config: dict, logger: logging.Logger) -> None:
     """Send a test message to verify Telegram configuration."""
     logger.info("Sending test message...")
@@ -602,6 +775,7 @@ def main() -> None:
 
     subparsers.add_parser("summary", help="Generate and send daily summary")
     subparsers.add_parser("watch", help="Check for intraday alerts")
+    subparsers.add_parser("digest", help="Send weekly digest summary")
     subparsers.add_parser("test", help="Send a test Telegram message")
 
     args = parser.parse_args()
@@ -626,6 +800,7 @@ def main() -> None:
     commands = {
         "summary": cmd_summary,
         "watch": cmd_watch,
+        "digest": cmd_digest,
         "test": cmd_test,
     }
 
