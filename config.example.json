@@ -7,6 +7,7 @@
             "gold_gbp": 1.5,
             "iswd": 2.0,
             "hbks": 2.0,
+            "brent": 2.5,
             "gbpusd": 1.0
         }
     },
@@ -14,6 +15,10 @@
         "gold_gbp": {
             "above": 2200.00,
             "below": 1800.00
+        },
+        "brent": {
+            "above": 85.00,
+            "below": 65.00
         },
         "gbpusd": {
             "above": 1.40,
