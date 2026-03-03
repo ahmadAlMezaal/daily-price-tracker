@@ -91,6 +91,9 @@ Edit your crontab with `crontab -e` and add:
 
 # Intraday watch every 15 min during market hours (Mon-Fri)
 */15 8-17 * * 1-5 cd /path/to/daily-price-tracker && python3 tracker.py watch >> logs/cron.log 2>&1
+
+# Weekly digest at 6:00 PM on Friday
+0 18 * * 5 cd /path/to/daily-price-tracker && python3 tracker.py digest >> logs/cron.log 2>&1
 ```
 
 ## Usage
@@ -101,6 +104,9 @@ python3 tracker.py summary
 
 # Check for intraday alerts
 python3 tracker.py watch
+
+# Send weekly digest (Friday evening recap)
+python3 tracker.py digest
 
 # Test Telegram connection
 python3 tracker.py test
@@ -226,6 +232,27 @@ Intraday Alert (16:00)
 Current: 1.2583
 Open: 1.2720
 Change: -1.08% (threshold: ±1.0%)
+```
+
+## Example Weekly Digest
+
+```
+📊 Weekly Digest
+Week of 03 Mar - 07 Mar 2026
+
+🥇 Gold
+  Open: £3,963.92 → Close: £3,816.20
+  Week: 🔴 -3.73%
+  Best day: Mon (+1.2%) | Worst: Fri (-2.1%)
+
+📈 ISWD
+  Open: £5.62 → Close: £5.71
+  Week: 🟢 +1.60%
+  Best day: Tue (+0.9%) | Worst: Wed (-0.3%)
+
+Alerts fired this week: 2
+  📉 Gold dip (Wed)
+  📈 Brent Crude spike (Thu)
 ```
 
 ## Troubleshooting
