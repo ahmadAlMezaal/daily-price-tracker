@@ -124,8 +124,8 @@ def send_telegram_message(config: dict, message: str, logger: logging.Logger) ->
         return False
 
 
-def get_gbp_usd_rate(logger: logging.Logger) -> float | None:
-    """Fetch the current GBP/USD exchange rate."""
+def get_gbp_usd_rate(logger: logging.Logger) -> dict | None:
+    """Fetch the current GBP/USD exchange rate with open price."""
     try:
         ticker = yf.Ticker("GBPUSD=X")
         data = ticker.history(period="1d")
@@ -133,8 +133,9 @@ def get_gbp_usd_rate(logger: logging.Logger) -> float | None:
             logger.error("No data returned for GBPUSD=X")
             return None
         rate = float(data["Close"].iloc[-1])
-        logger.debug(f"GBP/USD rate: {rate}")
-        return rate
+        open_rate = float(data["Open"].iloc[-1])
+        logger.debug(f"GBP/USD rate: {rate} (open: {open_rate})")
+        return {"rate": rate, "open": open_rate}
     except Exception as e:
         logger.error(f"Failed to fetch GBP/USD rate: {e}")
         return None
@@ -335,7 +336,8 @@ def cmd_summary(config: dict, logger: logging.Logger) -> None:
     logger.info("Generating daily summary...")
 
     # Get exchange rate
-    gbp_usd_rate = get_gbp_usd_rate(logger)
+    gbp_usd_data = get_gbp_usd_rate(logger)
+    gbp_usd_rate = gbp_usd_data["rate"] if gbp_usd_data else None
     if gbp_usd_rate is None:
         logger.warning("Could not fetch exchange rate, USD assets will be skipped")
 
@@ -434,7 +436,8 @@ def cmd_watch(config: dict, logger: logging.Logger) -> None:
     alerts_to_send = []
 
     # Get exchange rate
-    gbp_usd_rate = get_gbp_usd_rate(logger)
+    gbp_usd_data = get_gbp_usd_rate(logger)
+    gbp_usd_rate = gbp_usd_data["rate"] if gbp_usd_data else None
     if gbp_usd_rate is None:
         logger.warning("Could not fetch exchange rate, USD assets will be skipped")
 
@@ -493,6 +496,55 @@ def cmd_watch(config: dict, logger: logging.Logger) -> None:
                 alerts_to_send.append(
                     f"🔔 *{asset_config['name']}* below {format_price_gbp(below)}!\n"
                     f"Current: {format_price_gbp(current)}"
+                )
+                state["fired"].append(alert_key)
+                logger.info(f"Alert triggered: {alert_key}")
+
+    # GBP/USD exchange rate alerts
+    if gbp_usd_data is not None:
+        gbp_usd_current = gbp_usd_data["rate"]
+        gbp_usd_open = gbp_usd_data["open"]
+
+        # Intraday threshold check
+        gbpusd_threshold = thresholds.get("gbpusd", 1.0)
+        if gbp_usd_open != 0:
+            gbpusd_change_pct = ((gbp_usd_current - gbp_usd_open) / gbp_usd_open) * 100
+
+            if abs(gbpusd_change_pct) >= gbpusd_threshold:
+                alert_key = f"intraday_gbpusd_{'+' if gbpusd_change_pct > 0 else '-'}"
+
+                if alert_key not in state["fired"]:
+                    direction = "📈 SPIKE" if gbpusd_change_pct > 0 else "📉 DIP"
+                    alerts_to_send.append(
+                        f"{direction}: *GBP/USD*\n"
+                        f"Current: {gbp_usd_current:.4f}\n"
+                        f"Open: {gbp_usd_open:.4f}\n"
+                        f"Change: {gbpusd_change_pct:+.2f}% (threshold: ±{gbpusd_threshold}%)"
+                    )
+                    state["fired"].append(alert_key)
+                    logger.info(f"Alert triggered: {alert_key}")
+
+        # Absolute price alerts for GBP/USD
+        gbpusd_price_alerts = price_alerts.get("gbpusd", {})
+
+        above = gbpusd_price_alerts.get("above")
+        if above is not None and gbp_usd_current >= above:
+            alert_key = "price_above_gbpusd"
+            if alert_key not in state["fired"]:
+                alerts_to_send.append(
+                    f"🔔 *GBP/USD* above {above:.4f}!\n"
+                    f"Current: {gbp_usd_current:.4f}"
+                )
+                state["fired"].append(alert_key)
+                logger.info(f"Alert triggered: {alert_key}")
+
+        below = gbpusd_price_alerts.get("below")
+        if below is not None and gbp_usd_current <= below:
+            alert_key = "price_below_gbpusd"
+            if alert_key not in state["fired"]:
+                alerts_to_send.append(
+                    f"🔔 *GBP/USD* below {below:.4f}!\n"
+                    f"Current: {gbp_usd_current:.4f}"
                 )
                 state["fired"].append(alert_key)
                 logger.info(f"Alert triggered: {alert_key}")

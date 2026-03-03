@@ -1,11 +1,11 @@
 # Daily Price Tracker
 
-A Python-based investment tracker that sends daily summaries and intraday spike/dip alerts for Gold, ISWD, and HBKS via Telegram. Designed to run on a Raspberry Pi via cron.
+A Python-based investment tracker that sends daily summaries and intraday spike/dip alerts for Gold, ISWD, HBKS, and GBP/USD via Telegram. Designed to run on a Raspberry Pi via cron.
 
 ## Features
 
 - **Daily Summary**: Prices in GBP, daily/weekly/monthly trends
-- **Intraday Alerts**: Notifications when assets move beyond configurable thresholds
+- **Intraday Alerts**: Notifications when assets or GBP/USD move beyond configurable thresholds
 - **Price Alerts**: Notifications when assets cross absolute price levels
 - **Deduplication**: Won't spam you with the same alert multiple times per day
 
@@ -16,6 +16,7 @@ A Python-based investment tracker that sends daily summaries and intraday spike/
 | Gold | `GC=F` | Gold futures, converted from USD to GBP |
 | ISWD | `ISWD.L` | iShares MSCI World Islamic ETF |
 | HBKS | `HBKS.L` | HSBC Global Sukuk ETF |
+| GBP/USD | `GBPUSD=X` | Exchange rate alerts (intraday + absolute) |
 
 ## Quick Start (Raspberry Pi)
 
@@ -120,13 +121,18 @@ Edit `config.json` to customize:
         "thresholds": {
             "gold_gbp": 1.5,
             "iswd": 2.0,
-            "hbks": 2.0
+            "hbks": 2.0,
+            "gbpusd": 1.0
         }
     },
     "price_alerts": {
         "gold_gbp": {
             "above": 2200.00,
             "below": 1800.00
+        },
+        "gbpusd": {
+            "above": 1.40,
+            "below": 1.25
         }
     }
 }
@@ -135,8 +141,8 @@ Edit `config.json` to customize:
 ### Alert Thresholds
 
 - `default_threshold_pct`: Default percentage threshold for intraday alerts
-- `thresholds`: Per-asset percentage thresholds
-- `price_alerts`: Absolute price levels that trigger alerts
+- `thresholds`: Per-asset percentage thresholds (e.g. `gbpusd` defaults to 1.0% — tighter than equities since currency pairs move less)
+- `price_alerts`: Absolute price levels that trigger alerts (GBP/USD uses 4-decimal exchange rate values)
 
 ## Adding New Assets
 
@@ -191,7 +197,7 @@ Price: £23.45
 GBP/USD: 1.2650
 ```
 
-## Example Alert
+## Example Alerts
 
 ```
 Intraday Alert (14:30)
@@ -200,6 +206,15 @@ Intraday Alert (14:30)
 Current: £2,178.50
 Open: £2,145.32
 Change: +1.55% (threshold: ±1.5%)
+```
+
+```
+Intraday Alert (16:00)
+
+📉 DIP: GBP/USD
+Current: 1.2583
+Open: 1.2720
+Change: -1.08% (threshold: ±1.0%)
 ```
 
 ## Troubleshooting
