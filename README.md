@@ -1,6 +1,6 @@
 # Daily Price Tracker
 
-A Python-based investment tracker that sends daily summaries and intraday spike/dip alerts for Gold, ISWD, HBKS, and GBP/USD via Telegram. Designed to run on a Raspberry Pi via cron.
+A Python-based investment tracker that sends daily summaries and intraday spike/dip alerts for Gold, Brent Crude, ISWD, HBKS, and GBP/USD via Telegram. Designed to run on a Raspberry Pi via cron.
 
 ## Features
 
@@ -16,6 +16,7 @@ A Python-based investment tracker that sends daily summaries and intraday spike/
 | Gold | `GC=F` | Gold futures, converted from USD to GBP |
 | ISWD | `ISWD.L` | iShares MSCI World Islamic ETF |
 | HBKS | `HBKS.L` | HSBC Global Sukuk ETF |
+| Brent Crude | `BZ=F` | Brent Crude Oil futures, converted from USD to GBP |
 | GBP/USD | `GBPUSD=X` | Exchange rate alerts (intraday + absolute) |
 
 ## Quick Start (Raspberry Pi)
@@ -122,6 +123,7 @@ Edit `config.json` to customize:
             "gold_gbp": 1.5,
             "iswd": 2.0,
             "hbks": 2.0,
+            "brent": 2.5,
             "gbpusd": 1.0
         }
     },
@@ -129,6 +131,10 @@ Edit `config.json` to customize:
         "gold_gbp": {
             "above": 2200.00,
             "below": 1800.00
+        },
+        "brent": {
+            "above": 85.00,
+            "below": 65.00
         },
         "gbpusd": {
             "above": 1.40,
@@ -141,7 +147,7 @@ Edit `config.json` to customize:
 ### Alert Thresholds
 
 - `default_threshold_pct`: Default percentage threshold for intraday alerts
-- `thresholds`: Per-asset percentage thresholds (e.g. `gbpusd` defaults to 1.0% — tighter than equities since currency pairs move less)
+- `thresholds`: Per-asset percentage thresholds (e.g. `brent` at 2.5% for oil volatility, `gbpusd` at 1.0% for tighter currency moves)
 - `price_alerts`: Absolute price levels that trigger alerts (GBP/USD uses 4-decimal exchange rate values)
 
 ## Adding New Assets
@@ -193,6 +199,11 @@ HBKS
 Price: £23.45
 🟢 +£0.15 (+0.64%)
 5d: +0.89% | 22d: +1.56%
+
+Brent Crude
+£57.12 / $72.30 per bbl
+🔴 -£0.85 (-1.47%)
+5d: -2.10% | 22d: +0.95%
 
 GBP/USD: 1.2650
 ```

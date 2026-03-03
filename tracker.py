@@ -53,6 +53,13 @@ ASSETS = {
         "native_currency": "GBP",
         "unit": "",
     },
+    "brent": {
+        "ticker": "BZ=F",
+        "name": "Brent Crude",
+        "emoji": "🛢️",
+        "native_currency": "USD",
+        "unit": "per bbl",
+    },
 }
 
 # LSE tickers that are known to be quoted in pence (not pounds)
