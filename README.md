@@ -82,20 +82,27 @@ python3 tracker.py test
 # Set up cron jobs manually (see below)
 ```
 
-### Manual Cron Setup
+### Cron Setup
 
-Edit your crontab with `crontab -e` and add:
+Run the standalone cron installer (idempotent — safe to re-run anytime):
 
-```cron
-# Daily summary at 8:00 AM (Mon-Fri)
-0 8 * * 1-5 cd /path/to/daily-price-tracker && python3 tracker.py summary >> logs/cron.log 2>&1
-
-# Intraday watch every 15 min during market hours (Mon-Fri)
-*/15 8-17 * * 1-5 cd /path/to/daily-price-tracker && python3 tracker.py watch >> logs/cron.log 2>&1
-
-# Weekly digest at 6:00 PM on Friday
-0 18 * * 5 cd /path/to/daily-price-tracker && python3 tracker.py digest >> logs/cron.log 2>&1
+```bash
+./install_crons.sh
 ```
+
+This installs:
+- Daily summary at 8:00 AM (Mon-Fri)
+- Intraday watch every 15 min, 8AM-5PM (Mon-Fri)
+- Weekly digest at 6:00 PM Friday
+
+### Updating After `git pull`
+
+```bash
+git pull
+./install_crons.sh
+```
+
+This ensures any new or changed cron jobs are picked up automatically.
 
 ## Usage
 
@@ -318,7 +325,8 @@ daily-price-tracker/
 ├── config.json             # Your configuration (gitignored)
 ├── config.example.json     # Template configuration
 ├── requirements.txt        # Python dependencies
-├── setup_pi.sh             # Setup script
+├── setup_pi.sh             # First-time setup script
+├── install_crons.sh        # Idempotent cron job installer
 ├── .gitignore
 ├── README.md
 ├── data/

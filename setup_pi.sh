@@ -119,31 +119,7 @@ echo "  Setting up Cron Jobs"
 echo "========================================"
 echo
 
-# Get absolute path to tracker.py
-TRACKER_PATH="$SCRIPT_DIR/tracker.py"
-PYTHON_PATH=$(which python3)
-
-# Remove any existing tracker cron jobs
-crontab -l 2>/dev/null | grep -v "daily-price-tracker" | grep -v "$TRACKER_PATH" > /tmp/crontab.tmp || true
-
-# Add new cron jobs
-# Daily summary at 8:00 AM London time (weekdays)
-echo "0 8 * * 1-5 cd $SCRIPT_DIR && $PYTHON_PATH $TRACKER_PATH summary >> $SCRIPT_DIR/logs/cron.log 2>&1 # daily-price-tracker" >> /tmp/crontab.tmp
-
-# Intraday watch every 15 minutes during market hours (8-17, weekdays)
-echo "*/15 8-17 * * 1-5 cd $SCRIPT_DIR && $PYTHON_PATH $TRACKER_PATH watch >> $SCRIPT_DIR/logs/cron.log 2>&1 # daily-price-tracker" >> /tmp/crontab.tmp
-
-# Install new crontab
-crontab /tmp/crontab.tmp
-rm /tmp/crontab.tmp
-
-echo "Cron jobs installed:"
-echo "  - Daily summary: 8:00 AM (Mon-Fri)"
-echo "  - Intraday watch: Every 15 min, 8AM-5PM (Mon-Fri)"
-echo
-echo "To view cron jobs: crontab -l"
-echo "To edit cron jobs: crontab -e"
-echo
+"$SCRIPT_DIR/install_crons.sh"
 
 echo "========================================"
 echo "  Setup Complete!"
