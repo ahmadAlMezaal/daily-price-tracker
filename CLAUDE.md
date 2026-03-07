@@ -26,12 +26,14 @@ python3 tracker.py summary   # Daily price summary
 python3 tracker.py watch     # Intraday spike/dip alerts
 python3 tracker.py digest    # Weekly digest (Friday)
 python3 tracker.py test      # Test Telegram connection
+python3 subscribe.py         # Persistent listener for /subscribe commands
 ```
 
 ## Project Structure
 
 ```
 tracker.py              # Main script — all logic lives here
+subscribe.py            # Persistent polling listener for /subscribe commands
 config.json             # User config with Telegram creds + thresholds (gitignored)
 config.example.json     # Template config (committed)
 install_crons.sh        # Idempotent cron installer (uses venv Python)
@@ -40,6 +42,7 @@ requirements.txt        # Python dependencies
 data/                   # Runtime data (gitignored)
   price_history.json    # 90-day rolling price history
   alerts_state.json     # Today's fired alerts
+  subscribers.json      # Subscriber chat IDs (auto-populated)
 logs/                   # Log files (gitignored)
 ```
 
@@ -53,7 +56,7 @@ logs/                   # Log files (gitignored)
 
 ## Architecture Notes
 
-- Single-file architecture — all logic is in `tracker.py`
+- Main logic lives in `tracker.py`; `subscribe.py` is a separate long-running listener
 - `ASSETS` dict defines tracked assets with ticker, currency, and display config
 - LSE tickers (`.L`) have smart pence-to-pounds detection (threshold > 100)
 - Alert deduplication: each alert type fires once per direction per day via `alerts_state.json`
@@ -75,6 +78,7 @@ Runs on a Raspberry Pi with:
 - Python venv at `~/daily-price-tracker/venv/` (PEP 668 enforced on Pi OS)
 - Cron jobs installed via `./install_crons.sh` (tagged with `# daily-price-tracker`)
 - Three cron schedules: daily summary (8am), intraday watch (every 15min), weekly digest (6pm Friday)
+- `subscribe.py` runs in a dedicated tmux pane: `tmux new -d -s subscribe 'python3 subscribe.py'`
 
 ## Testing
 
@@ -82,6 +86,7 @@ Runs on a Raspberry Pi with:
 - `python3 tracker.py -v summary` — verbose mode for debugging
 - Temporarily lower thresholds to test alert firing
 - Check `logs/tracker.log` for application logs, `logs/cron.log` for cron output
+- Check `logs/subscribe.log` for subscription listener logs
 
 ## Important Conventions
 
@@ -89,4 +94,5 @@ Runs on a Raspberry Pi with:
 - `config.json` is gitignored and must stay that way
 - All prices are displayed in both GBP and USD
 - Telegram messages use Markdown formatting
-- Keep the single-file architecture unless there's a strong reason to split
+- `send_telegram_message()` fans out to all subscribers in `data/subscribers.json`, falling back to config `telegram_chat_id`
+- `subscribe.py` is intentionally separate — it's a long-running process, not a cron job
