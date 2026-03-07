@@ -25,6 +25,7 @@ DATA_DIR = PROJECT_DIR / "data"
 LOGS_DIR = PROJECT_DIR / "logs"
 HISTORY_PATH = DATA_DIR / "price_history.json"
 ALERTS_STATE_PATH = DATA_DIR / "alerts_state.json"
+SUBSCRIBERS_PATH = DATA_DIR / "subscribers.json"
 LOG_PATH = LOGS_DIR / "tracker.log"
 
 # Timezone
@@ -109,26 +110,57 @@ def load_config() -> dict:
         return json.load(f)
 
 
+def load_subscribers() -> list[str]:
+    """Load subscriber chat IDs from subscribers.json."""
+    if not SUBSCRIBERS_PATH.exists():
+        return []
+
+    with open(SUBSCRIBERS_PATH) as f:
+        data = json.load(f)
+
+    return data.get("subscribers", [])
+
+
+def save_subscribers(chat_ids: list[str]) -> None:
+    """Save subscriber chat IDs to subscribers.json."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    with open(SUBSCRIBERS_PATH, "w") as f:
+        json.dump({"subscribers": chat_ids}, f, indent=2)
+
+
 def send_telegram_message(config: dict, message: str, logger: logging.Logger) -> bool:
-    """Send a message via Telegram bot API."""
+    """Send a message to all subscribers via Telegram bot API.
+
+    Sends to all chat IDs in subscribers.json, falling back to
+    config telegram_chat_id if no subscribers exist.
+    """
     token = config["telegram_bot_token"]
-    chat_id = config["telegram_chat_id"]
+
+    # Build recipient list: subscribers with fallback to config chat_id
+    subscribers = load_subscribers()
+    if not subscribers:
+        subscribers = [str(config["telegram_chat_id"])]
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "Markdown",
-    }
+    all_ok = True
 
-    try:
-        response = requests.post(url, json=payload, timeout=30)
-        response.raise_for_status()
-        logger.info("Telegram message sent successfully")
-        return True
-    except requests.RequestException as e:
-        logger.error(f"Failed to send Telegram message: {e}")
-        return False
+    for chat_id in subscribers:
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown",
+        }
+
+        try:
+            response = requests.post(url, json=payload, timeout=30)
+            response.raise_for_status()
+            logger.info(f"Telegram message sent to {chat_id}")
+        except requests.RequestException as e:
+            logger.error(f"Failed to send Telegram message to {chat_id}: {e}")
+            all_ok = False
+
+    return all_ok
 
 
 VIX_LABELS = [
