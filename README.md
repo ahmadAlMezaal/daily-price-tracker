@@ -337,6 +337,10 @@ daily-price-tracker/
     └── cron.log            # Cron job output
 ```
 
+## Disclaimer
+
+This tool is provided for personal and informational use only. It is **not financial advice**, and nothing it reports should be treated as a recommendation to buy, sell, or hold any asset. Always do your own research and consult a qualified financial professional before making investment decisions.
+
 ## License
 
 MIT
