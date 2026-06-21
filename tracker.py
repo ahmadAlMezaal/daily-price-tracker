@@ -488,8 +488,8 @@ def cmd_summary(config: dict, logger: logging.Logger, *, dry_run: bool = False) 
     if gbp_usd_rate:
         lines.append(f"_GBP/USD: {gbp_usd_rate:.4f}_")
 
-    # Save today's prices to history
-    if prices:
+    # Save today's prices to history (skip during dry run)
+    if prices and not dry_run:
         # Remove any existing entry for today
         history["entries"] = [e for e in history["entries"] if e["date"] != today]
         history["entries"].append({
@@ -633,8 +633,9 @@ def cmd_watch(config: dict, logger: logging.Logger, *, dry_run: bool = False) ->
                 state["fired"].append(alert_key)
                 logger.info(f"Alert triggered: {alert_key}")
 
-    # Save state
-    save_alerts_state(state)
+    # Save state (skip during dry run)
+    if not dry_run:
+        save_alerts_state(state)
 
     # Send alerts
     if alerts_to_send:
