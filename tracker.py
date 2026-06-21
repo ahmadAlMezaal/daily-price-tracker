@@ -404,7 +404,7 @@ def format_trend(trend: float | None, label: str) -> str:
     return f"{label}: {sign}{trend:.2f}%"
 
 
-def cmd_summary(config: dict, logger: logging.Logger) -> None:
+def cmd_summary(config: dict, logger: logging.Logger, dry_run: bool = False) -> None:
     """Generate and send daily summary."""
     logger.info("Generating daily summary...")
 
@@ -503,10 +503,15 @@ def cmd_summary(config: dict, logger: logging.Logger) -> None:
     # Send message
     message = "\n".join(lines)
     logger.debug(f"Summary message:\n{message}")
-    send_telegram_message(config, message, logger)
+
+    if dry_run:
+        print("=== DRY RUN — not sending to Telegram ===")
+        print(message)
+    else:
+        send_telegram_message(config, message, logger)
 
 
-def cmd_watch(config: dict, logger: logging.Logger) -> None:
+def cmd_watch(config: dict, logger: logging.Logger, dry_run: bool = False) -> None:
     """Check for intraday spikes/dips and price alerts."""
     logger.info("Running intraday watch...")
 
@@ -636,7 +641,12 @@ def cmd_watch(config: dict, logger: logging.Logger) -> None:
         now = datetime.now(LONDON_TZ).strftime("%H:%M")
         header = f"*Intraday Alert* ({now})\n\n"
         message = header + "\n\n".join(alerts_to_send)
-        send_telegram_message(config, message, logger)
+
+        if dry_run:
+            print("=== DRY RUN — not sending to Telegram ===")
+            print(message)
+        else:
+            send_telegram_message(config, message, logger)
     else:
         logger.info("No new alerts to send")
 
@@ -690,7 +700,7 @@ def _alert_key_to_human(alert_key: str) -> tuple[str, str]:
     return ("🔔", f"{name} {word}")
 
 
-def cmd_digest(config: dict, logger: logging.Logger) -> None:
+def cmd_digest(config: dict, logger: logging.Logger, dry_run: bool = False) -> None:
     """Generate and send weekly digest summary."""
     logger.info("Generating weekly digest...")
 
@@ -811,10 +821,15 @@ def cmd_digest(config: dict, logger: logging.Logger) -> None:
 
     message = "\n".join(lines)
     logger.debug(f"Digest message:\n{message}")
-    send_telegram_message(config, message, logger)
+
+    if dry_run:
+        print("=== DRY RUN — not sending to Telegram ===")
+        print(message)
+    else:
+        send_telegram_message(config, message, logger)
 
 
-def cmd_test(config: dict, logger: logging.Logger) -> None:
+def cmd_test(config: dict, logger: logging.Logger, dry_run: bool = False) -> None:
     """Send a test message to verify Telegram configuration."""
     logger.info("Sending test message...")
 
@@ -824,7 +839,10 @@ def cmd_test(config: dict, logger: logging.Logger) -> None:
         f"_Sent at {datetime.now(LONDON_TZ).strftime('%Y-%m-%d %H:%M:%S')} London time_"
     )
 
-    if send_telegram_message(config, message, logger):
+    if dry_run:
+        print("=== DRY RUN — not sending to Telegram ===")
+        print(message)
+    elif send_telegram_message(config, message, logger):
         print("Test message sent successfully!")
     else:
         print("Failed to send test message. Check logs for details.")
@@ -841,6 +859,11 @@ def main() -> None:
         "-v", "--verbose",
         action="store_true",
         help="Enable verbose output",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print messages to stdout instead of sending to Telegram",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -877,7 +900,7 @@ def main() -> None:
     }
 
     try:
-        commands[args.command](config, logger)
+        commands[args.command](config, logger, dry_run=args.dry_run)
     except Exception as e:
         logger.exception(f"Command '{args.command}' failed: {e}")
         sys.exit(1)
