@@ -121,6 +121,10 @@ python3 tracker.py test
 
 # Verbose output
 python3 tracker.py -v summary
+
+# Dry run — print output to stdout instead of sending to Telegram
+python3 tracker.py --dry-run summary
+python3 tracker.py --dry-run watch
 ```
 
 ## Configuration
