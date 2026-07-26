@@ -126,6 +126,10 @@ python3 tracker.py -v summary
 python3 tracker.py --dry-run summary
 ```
 
+`--dry-run` is side-effect free: it writes neither price history nor alert
+state, so running `--dry-run watch` will never cause the next scheduled run to
+skip a real alert.
+
 ## Configuration
 
 Edit `config.json` to customize:

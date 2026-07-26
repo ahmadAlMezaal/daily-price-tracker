@@ -12,6 +12,8 @@ Usage:
 
 import json
 import logging
+import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -32,6 +34,15 @@ LONDON_TZ = pytz.timezone("Europe/London")
 
 # Long polling timeout (seconds)
 POLL_TIMEOUT = 60
+
+# Telegram bot tokens appear inside API URLs, and requests embeds the full URL
+# in its exception messages — so an unredacted error log leaks the token.
+TOKEN_IN_URL_RE = re.compile(r"/bot[0-9]+:[A-Za-z0-9_-]+")
+
+
+def redact(text: object) -> str:
+    """Strip any Telegram bot token out of text before it reaches the logs."""
+    return TOKEN_IN_URL_RE.sub("/bot<redacted>", str(text))
 
 
 def setup_logging() -> logging.Logger:
@@ -68,23 +79,41 @@ def load_config() -> dict:
         return json.load(f)
 
 
-def load_subscribers() -> list[str]:
-    """Load subscriber chat IDs from subscribers.json."""
+def load_subscribers(logger: logging.Logger | None = None) -> list[str]:
+    """Load subscriber chat IDs from subscribers.json.
+
+    A corrupt file must not kill the listener — losing the subscriber list is
+    recoverable (people can re-subscribe), a crash loop is not.
+    """
     if not SUBSCRIBERS_PATH.exists():
         return []
 
-    with open(SUBSCRIBERS_PATH) as f:
-        data = json.load(f)
+    try:
+        with open(SUBSCRIBERS_PATH) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        if logger:
+            logger.error(f"Could not read subscribers.json ({e}) — treating as empty")
+        return []
 
     return data.get("subscribers", [])
 
 
 def save_subscribers(chat_ids: list[str]) -> None:
-    """Save subscriber chat IDs to subscribers.json."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    """Save subscriber chat IDs to subscribers.json.
 
-    with open(SUBSCRIBERS_PATH, "w") as f:
+    Written via temp file and rename so that tracker.py, which reads this file
+    from a separate process, never observes a half-written list.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = SUBSCRIBERS_PATH.with_suffix(SUBSCRIBERS_PATH.suffix + ".tmp")
+
+    with open(tmp_path, "w") as f:
         json.dump({"subscribers": chat_ids}, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+
+    os.replace(tmp_path, SUBSCRIBERS_PATH)
 
 
 def send_reply(token: str, chat_id: str, text: str, logger: logging.Logger) -> None:
@@ -100,7 +129,7 @@ def send_reply(token: str, chat_id: str, text: str, logger: logging.Logger) -> N
         response = requests.post(url, json=payload, timeout=30)
         response.raise_for_status()
     except requests.RequestException as e:
-        logger.error(f"Failed to send reply to {chat_id}: {e}")
+        logger.error(f"Failed to send reply to {chat_id}: {redact(e)}")
 
 
 def poll_updates(token: str, offset: int, logger: logging.Logger) -> tuple[list, int]:
@@ -118,7 +147,7 @@ def poll_updates(token: str, offset: int, logger: logging.Logger) -> tuple[list,
         data = response.json()
 
         if not data.get("ok"):
-            logger.error(f"Telegram API error: {data}")
+            logger.error(f"Telegram API error: {redact(data)}")
             return [], offset
 
         updates = data.get("result", [])
@@ -128,7 +157,7 @@ def poll_updates(token: str, offset: int, logger: logging.Logger) -> tuple[list,
         return updates, offset
 
     except requests.RequestException as e:
-        logger.error(f"Polling error: {e}")
+        logger.error(f"Polling error: {redact(e)}")
         return [], offset
 
 
@@ -144,7 +173,7 @@ def handle_update(update: dict, token: str, logger: logging.Logger) -> None:
     username = user.get("username", "unknown")
 
     if text == "/subscribe":
-        subscribers = load_subscribers()
+        subscribers = load_subscribers(logger)
 
         if chat_id in subscribers:
             send_reply(token, chat_id, "You're already subscribed.", logger)
@@ -164,7 +193,7 @@ def handle_update(update: dict, token: str, logger: logging.Logger) -> None:
         logger.info(f"New subscriber: {username} ({chat_id}) — total: {len(subscribers)}")
 
     elif text == "/unsubscribe":
-        subscribers = load_subscribers()
+        subscribers = load_subscribers(logger)
 
         if chat_id not in subscribers:
             send_reply(token, chat_id, "You're not currently subscribed.", logger)
@@ -208,7 +237,7 @@ def main() -> None:
             logger.info("Shutting down subscription listener")
             break
         except Exception as e:
-            logger.exception(f"Unexpected error: {e}")
+            logger.exception(f"Unexpected error: {redact(e)}")
             time.sleep(5)
 
 

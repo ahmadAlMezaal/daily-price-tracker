@@ -10,6 +10,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -70,6 +71,47 @@ PENCE_THRESHOLD = 100
 # History retention
 HISTORY_DAYS = 90
 
+# Telegram bot tokens appear inside API URLs, and requests embeds the full URL
+# in its exception messages — so an unredacted error log leaks the token.
+TOKEN_IN_URL_RE = re.compile(r"/bot[0-9]+:[A-Za-z0-9_-]+")
+
+
+def redact(text: object) -> str:
+    """Strip any Telegram bot token out of text before it reaches the logs."""
+    return TOKEN_IN_URL_RE.sub("/bot<redacted>", str(text))
+
+
+def read_json(path: Path, default: dict, logger: logging.Logger | None = None) -> dict:
+    """Read a JSON file, falling back to a default if it is missing or unreadable.
+
+    Runtime state lives on a Raspberry Pi SD card that can lose power mid-write.
+    A corrupt file must not take the tracker down until someone SSHes in to
+    delete it by hand.
+    """
+    if not path.exists():
+        return default
+
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        if logger:
+            logger.error(f"Could not read {path.name} ({e}) — falling back to defaults")
+        return default
+
+
+def write_json_atomic(path: Path, data: dict) -> None:
+    """Write JSON via a temp file and rename, so readers never see a partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+
+    os.replace(tmp_path, path)
+
 
 def setup_logging(verbose: bool = False) -> logging.Logger:
     """Configure logging to file and optionally stdout."""
@@ -110,40 +152,40 @@ def load_config() -> dict:
         return json.load(f)
 
 
-def load_subscribers() -> list[str]:
+def load_subscribers(logger: logging.Logger | None = None) -> list[str]:
     """Load subscriber chat IDs from subscribers.json."""
-    if not SUBSCRIBERS_PATH.exists():
-        return []
-
-    with open(SUBSCRIBERS_PATH) as f:
-        data = json.load(f)
-
+    data = read_json(SUBSCRIBERS_PATH, {"subscribers": []}, logger)
     return data.get("subscribers", [])
 
 
 def save_subscribers(chat_ids: list[str]) -> None:
     """Save subscriber chat IDs to subscribers.json."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    with open(SUBSCRIBERS_PATH, "w") as f:
-        json.dump({"subscribers": chat_ids}, f, indent=2)
+    write_json_atomic(SUBSCRIBERS_PATH, {"subscribers": chat_ids})
 
 
-def send_telegram_message(config: dict, message: str, logger: logging.Logger) -> bool:
+def send_telegram_message(
+    config: dict, message: str, logger: logging.Logger
+) -> tuple[int, int]:
     """Send a message to all subscribers via Telegram bot API.
 
     Sends to all chat IDs in subscribers.json, falling back to
     config telegram_chat_id if no subscribers exist.
+
+    Returns (delivered, failed) recipient counts. Callers that persist state
+    should key off `delivered`, not `failed` — one permanently unreachable
+    subscriber (e.g. someone who blocked the bot) must not make everyone else
+    receive the same alert on every subsequent run.
     """
     token = config["telegram_bot_token"]
 
     # Build recipient list: subscribers with fallback to config chat_id
-    subscribers = load_subscribers()
+    subscribers = load_subscribers(logger)
     if not subscribers:
         subscribers = [str(config["telegram_chat_id"])]
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    all_ok = True
+    delivered = 0
+    failed = 0
 
     for chat_id in subscribers:
         payload = {
@@ -156,11 +198,12 @@ def send_telegram_message(config: dict, message: str, logger: logging.Logger) ->
             response = requests.post(url, json=payload, timeout=30)
             response.raise_for_status()
             logger.info(f"Telegram message sent to {chat_id}")
+            delivered += 1
         except requests.RequestException as e:
-            logger.error(f"Failed to send Telegram message to {chat_id}: {e}")
-            all_ok = False
+            logger.error(f"Failed to send Telegram message to {chat_id}: {redact(e)}")
+            failed += 1
 
-    return all_ok
+    return delivered, failed
 
 
 VIX_LABELS = [
@@ -296,30 +339,23 @@ def get_asset_price(
         return None
 
 
-def load_history() -> dict:
+def load_history(logger: logging.Logger | None = None) -> dict:
     """Load price history from file."""
-    if not HISTORY_PATH.exists():
-        return {"entries": []}
-
-    with open(HISTORY_PATH) as f:
-        return json.load(f)
+    return read_json(HISTORY_PATH, {"entries": []}, logger)
 
 
 def save_history(history: dict) -> None:
     """Save price history to file, trimming to HISTORY_DAYS."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
     # Trim old entries
     cutoff = datetime.now(LONDON_TZ) - timedelta(days=HISTORY_DAYS)
     cutoff_str = cutoff.strftime("%Y-%m-%d")
 
     history["entries"] = [
-        entry for entry in history["entries"]
+        entry for entry in history.get("entries", [])
         if entry["date"] >= cutoff_str
     ]
 
-    with open(HISTORY_PATH, "w") as f:
-        json.dump(history, f, indent=2)
+    write_json_atomic(HISTORY_PATH, history)
 
 
 def calculate_trend(history: dict, asset_key: str, days: int) -> float | None:
@@ -352,16 +388,12 @@ def calculate_trend(history: dict, asset_key: str, days: int) -> float | None:
     return ((current - past) / past) * 100
 
 
-def load_alerts_state() -> dict:
+def load_alerts_state(logger: logging.Logger | None = None) -> dict:
     """Load today's alert state."""
-    if not ALERTS_STATE_PATH.exists():
-        return {"date": None, "fired": []}
-
-    with open(ALERTS_STATE_PATH) as f:
-        state = json.load(f)
+    today = datetime.now(LONDON_TZ).strftime("%Y-%m-%d")
+    state = read_json(ALERTS_STATE_PATH, {"date": today, "fired": []}, logger)
 
     # Reset if it's a new day
-    today = datetime.now(LONDON_TZ).strftime("%Y-%m-%d")
     if state.get("date") != today:
         return {"date": today, "fired": []}
 
@@ -370,13 +402,8 @@ def load_alerts_state() -> dict:
 
 def save_alerts_state(state: dict) -> None:
     """Save alert state to file."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    today = datetime.now(LONDON_TZ).strftime("%Y-%m-%d")
-    state["date"] = today
-
-    with open(ALERTS_STATE_PATH, "w") as f:
-        json.dump(state, f, indent=2)
+    state["date"] = datetime.now(LONDON_TZ).strftime("%Y-%m-%d")
+    write_json_atomic(ALERTS_STATE_PATH, state)
 
 
 def format_price_gbp(price: float) -> str:
@@ -415,7 +442,7 @@ def cmd_summary(config: dict, logger: logging.Logger, dry_run: bool = False) -> 
         logger.warning("Could not fetch exchange rate, USD assets will be skipped")
 
     # Load history
-    history = load_history()
+    history = load_history(logger)
 
     # Fetch all prices
     prices = {}
@@ -489,9 +516,11 @@ def cmd_summary(config: dict, logger: logging.Logger, dry_run: bool = False) -> 
         lines.append(f"_GBP/USD: {gbp_usd_rate:.4f}_")
 
     # Save today's prices to history
-    if prices:
+    if prices and not dry_run:
         # Remove any existing entry for today
-        history["entries"] = [e for e in history["entries"] if e["date"] != today]
+        history["entries"] = [
+            e for e in history.get("entries", []) if e["date"] != today
+        ]
         history["entries"].append({
             "date": today,
             "prices": prices,
@@ -506,6 +535,7 @@ def cmd_summary(config: dict, logger: logging.Logger, dry_run: bool = False) -> 
     if dry_run:
         print("=== DRY RUN — not sending to Telegram ===")
         print(message)
+        print("=== Price history not written ===")
     else:
         send_telegram_message(config, message, logger)
 
@@ -514,8 +544,13 @@ def cmd_watch(config: dict, logger: logging.Logger, dry_run: bool = False) -> No
     """Check for intraday spikes/dips and price alerts."""
     logger.info("Running intraday watch...")
 
-    # Load alert state
-    state = load_alerts_state()
+    # Load alert state. `seen` guards against re-firing an alert already sent
+    # earlier today (and against duplicates within this run); `pending_keys`
+    # holds what fired now, and is only committed to disk once Telegram has
+    # actually accepted the message.
+    state = load_alerts_state(logger)
+    seen = set(state["fired"])
+    pending_keys: list[str] = []
     alerts_to_send = []
 
     # Get exchange rate
@@ -547,7 +582,7 @@ def cmd_watch(config: dict, logger: logging.Logger, dry_run: bool = False) -> No
             if abs(change_pct) >= threshold:
                 alert_key = f"intraday_{asset_key}_{'+' if change_pct > 0 else '-'}"
 
-                if alert_key not in state["fired"]:
+                if alert_key not in seen:
                     direction = "📈 SPIKE" if change_pct > 0 else "📉 DIP"
                     alerts_to_send.append(
                         f"{direction}: *{asset_config['name']}*\n"
@@ -555,8 +590,9 @@ def cmd_watch(config: dict, logger: logging.Logger, dry_run: bool = False) -> No
                         f"Open: {format_price_gbp(open_price)}\n"
                         f"Change: {change_pct:+.2f}% (threshold: ±{threshold}%)"
                     )
-                    state["fired"].append(alert_key)
-                    logger.info(f"Alert triggered: {alert_key}")
+                    seen.add(alert_key)
+                    pending_keys.append(alert_key)
+                    logger.debug(f"Alert condition met: {alert_key}")
 
         # Check absolute price alerts
         asset_price_alerts = price_alerts.get(asset_key, {})
@@ -564,24 +600,26 @@ def cmd_watch(config: dict, logger: logging.Logger, dry_run: bool = False) -> No
         above = asset_price_alerts.get("above")
         if above is not None and current >= above:
             alert_key = f"price_above_{asset_key}"
-            if alert_key not in state["fired"]:
+            if alert_key not in seen:
                 alerts_to_send.append(
                     f"🔔 *{asset_config['name']}* above {format_price_gbp(above)}!\n"
                     f"Current: {format_price_gbp(current)}"
                 )
-                state["fired"].append(alert_key)
-                logger.info(f"Alert triggered: {alert_key}")
+                seen.add(alert_key)
+                pending_keys.append(alert_key)
+                logger.debug(f"Alert condition met: {alert_key}")
 
         below = asset_price_alerts.get("below")
         if below is not None and current <= below:
             alert_key = f"price_below_{asset_key}"
-            if alert_key not in state["fired"]:
+            if alert_key not in seen:
                 alerts_to_send.append(
                     f"🔔 *{asset_config['name']}* below {format_price_gbp(below)}!\n"
                     f"Current: {format_price_gbp(current)}"
                 )
-                state["fired"].append(alert_key)
-                logger.info(f"Alert triggered: {alert_key}")
+                seen.add(alert_key)
+                pending_keys.append(alert_key)
+                logger.debug(f"Alert condition met: {alert_key}")
 
     # GBP/USD exchange rate alerts
     if gbp_usd_data is not None:
@@ -596,7 +634,7 @@ def cmd_watch(config: dict, logger: logging.Logger, dry_run: bool = False) -> No
             if abs(gbpusd_change_pct) >= gbpusd_threshold:
                 alert_key = f"intraday_gbpusd_{'+' if gbpusd_change_pct > 0 else '-'}"
 
-                if alert_key not in state["fired"]:
+                if alert_key not in seen:
                     direction = "📈 SPIKE" if gbpusd_change_pct > 0 else "📉 DIP"
                     alerts_to_send.append(
                         f"{direction}: *GBP/USD*\n"
@@ -604,8 +642,9 @@ def cmd_watch(config: dict, logger: logging.Logger, dry_run: bool = False) -> No
                         f"Open: {gbp_usd_open:.4f}\n"
                         f"Change: {gbpusd_change_pct:+.2f}% (threshold: ±{gbpusd_threshold}%)"
                     )
-                    state["fired"].append(alert_key)
-                    logger.info(f"Alert triggered: {alert_key}")
+                    seen.add(alert_key)
+                    pending_keys.append(alert_key)
+                    logger.debug(f"Alert condition met: {alert_key}")
 
         # Absolute price alerts for GBP/USD
         gbpusd_price_alerts = price_alerts.get("gbpusd", {})
@@ -613,40 +652,61 @@ def cmd_watch(config: dict, logger: logging.Logger, dry_run: bool = False) -> No
         above = gbpusd_price_alerts.get("above")
         if above is not None and gbp_usd_current >= above:
             alert_key = "price_above_gbpusd"
-            if alert_key not in state["fired"]:
+            if alert_key not in seen:
                 alerts_to_send.append(
                     f"🔔 *GBP/USD* above {above:.4f}!\n"
                     f"Current: {gbp_usd_current:.4f}"
                 )
-                state["fired"].append(alert_key)
-                logger.info(f"Alert triggered: {alert_key}")
+                seen.add(alert_key)
+                pending_keys.append(alert_key)
+                logger.debug(f"Alert condition met: {alert_key}")
 
         below = gbpusd_price_alerts.get("below")
         if below is not None and gbp_usd_current <= below:
             alert_key = "price_below_gbpusd"
-            if alert_key not in state["fired"]:
+            if alert_key not in seen:
                 alerts_to_send.append(
                     f"🔔 *GBP/USD* below {below:.4f}!\n"
                     f"Current: {gbp_usd_current:.4f}"
                 )
-                state["fired"].append(alert_key)
-                logger.info(f"Alert triggered: {alert_key}")
+                seen.add(alert_key)
+                pending_keys.append(alert_key)
+                logger.debug(f"Alert condition met: {alert_key}")
 
-    # Save state
-    save_alerts_state(state)
-
-    # Send alerts
-    if alerts_to_send:
-        now = datetime.now(LONDON_TZ).strftime("%H:%M")
-        header = f"*Intraday Alert* ({now})\n\n"
-        message = header + "\n\n".join(alerts_to_send)
-        if dry_run:
-            print("=== DRY RUN — not sending to Telegram ===")
-            print(message)
-        else:
-            send_telegram_message(config, message, logger)
-    else:
+    if not alerts_to_send:
         logger.info("No new alerts to send")
+        return
+
+    now = datetime.now(LONDON_TZ).strftime("%H:%M")
+    header = f"*Intraday Alert* ({now})\n\n"
+    message = header + "\n\n".join(alerts_to_send)
+
+    if dry_run:
+        print("=== DRY RUN — not sending to Telegram ===")
+        print(message)
+        print(
+            f"=== {len(pending_keys)} alert(s) would fire; "
+            "alert state not written, so the real run is unaffected ==="
+        )
+        return
+
+    delivered, failed = send_telegram_message(config, message, logger)
+
+    # Only mark alerts as fired once they have reached at least one recipient.
+    # Recording them before sending would mean a network blip silently swallows
+    # the alert for the rest of the day.
+    if delivered:
+        state["fired"].extend(pending_keys)
+        save_alerts_state(state)
+        for alert_key in pending_keys:
+            logger.info(f"Alert triggered: {alert_key}")
+        if failed:
+            logger.warning(f"{failed} recipient(s) did not receive this alert")
+    else:
+        logger.error(
+            f"Telegram delivery failed — {len(pending_keys)} alert(s) left unfired "
+            "and will be retried on the next run"
+        )
 
 
 def _alert_key_to_human(alert_key: str) -> tuple[str, str]:
@@ -710,7 +770,7 @@ def cmd_digest(config: dict, logger: logging.Logger, dry_run: bool = False) -> N
     fri_str = friday.strftime("%Y-%m-%d")
 
     # Load history and filter to this week
-    history = load_history()
+    history = load_history(logger)
     week_entries = [
         e for e in history.get("entries", [])
         if mon_str <= e["date"] <= fri_str
@@ -839,8 +899,14 @@ def cmd_test(config: dict, logger: logging.Logger, dry_run: bool = False) -> Non
     if dry_run:
         print("=== DRY RUN — not sending to Telegram ===")
         print(message)
-    elif send_telegram_message(config, message, logger):
-        print("Test message sent successfully!")
+        return
+
+    delivered, failed = send_telegram_message(config, message, logger)
+
+    if delivered:
+        print(f"Test message sent successfully to {delivered} recipient(s)!")
+        if failed:
+            print(f"Warning: {failed} recipient(s) could not be reached.")
     else:
         print("Failed to send test message. Check logs for details.")
         sys.exit(1)
@@ -899,7 +965,7 @@ def main() -> None:
     try:
         commands[args.command](config, logger, dry_run=args.dry_run)
     except Exception as e:
-        logger.exception(f"Command '{args.command}' failed: {e}")
+        logger.exception(f"Command '{args.command}' failed: {redact(e)}")
         sys.exit(1)
 
 
