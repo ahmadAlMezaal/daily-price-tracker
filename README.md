@@ -1,6 +1,6 @@
 # Daily Price Tracker
 
-A Python-based investment tracker that sends daily summaries and intraday spike/dip alerts for Gold, Brent Crude, ISWD, HBKS, and GBP/USD via Telegram. Designed to run on a Raspberry Pi via cron.
+A Python-based investment tracker that sends daily summaries and intraday spike/dip alerts for Gold, Brent Crude, ISWD, ISDE, and GBP/USD via Telegram. Designed to run on a Raspberry Pi via cron.
 
 ## Features
 
@@ -15,8 +15,8 @@ A Python-based investment tracker that sends daily summaries and intraday spike/
 | Asset | Ticker | Description |
 |-------|--------|-------------|
 | Gold | `GC=F` | Gold futures, converted from USD to GBP |
-| ISWD | `ISWD.L` | iShares MSCI World Islamic ETF |
-| HBKS | `HBKS.L` | HSBC Global Sukuk ETF |
+| ISWD | `ISWD.L` | iShares MSCI World Islamic ETF, quoted in pence |
+| ISDE | `ISDE.L` | iShares MSCI EM Islamic ETF, quoted in USD and converted to GBP |
 | Brent Crude | `BZ=F` | Brent Crude Oil futures, converted from USD to GBP |
 | GBP/USD | `GBPUSD=X` | Exchange rate alerts (intraday + absolute) |
 
@@ -139,7 +139,7 @@ Edit `config.json` to customize:
         "thresholds": {
             "gold_gbp": 1.5,
             "iswd": 2.0,
-            "hbks": 2.0,
+            "isde": 2.0,
             "brent": 2.5,
             "gbpusd": 1.0
         }
@@ -175,13 +175,23 @@ Edit `tracker.py` and add to the `ASSETS` dictionary:
 ASSETS = {
     # ... existing assets ...
     "new_asset": {
-        "ticker": "TICKER.L",      # Yahoo Finance ticker
+        "ticker": "TICKER.L",       # Yahoo Finance ticker
         "name": "Display Name",     # Name shown in messages
-        "currency": "GBP",          # Native currency
-        "convert_to_gbp": False,    # True if needs USD→GBP conversion
-        "pence_to_pounds": True,    # True if quoted in pence
+        "emoji": "📈",              # Emoji shown beside the name
+        "native_currency": "GBP",   # "GBP" or "USD" — USD assets are converted to GBP
+        "unit": "",                 # Optional suffix, e.g. "per oz"
     },
 }
+```
+
+`native_currency` must match the currency the ticker is actually **quoted** in, not the
+fund's base currency. LSE (`.L`) tickers quoted in GBP are auto-detected as pence and
+divided by 100 when the raw value exceeds `PENCE_THRESHOLD`; USD-quoted `.L` tickers
+such as `ISDE.L` skip that conversion entirely. Check with:
+
+```python
+import yfinance as yf
+yf.Ticker("TICKER.L").info["currency"]   # "GBp" = pence, "GBP" = pounds, "USD" = dollars
 ```
 
 Then add thresholds in `config.json`:
@@ -212,9 +222,9 @@ Price: £5.67
 🔴 -£0.03 (-0.53%)
 5d: -0.12% | 22d: +2.10%
 
-HBKS
-Price: £23.45
-🟢 +£0.15 (+0.64%)
+ISDE
+£25.18 / $34.00
+🟢 +£0.16 (+0.64%)
 5d: +0.89% | 22d: +1.56%
 
 Brent Crude

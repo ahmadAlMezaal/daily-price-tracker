@@ -2,7 +2,7 @@
 """
 Daily Investment Price Tracker
 
-Tracks gold (GC=F), ISWD.L, and HBKS.L prices.
+Tracks gold (GC=F), ISWD.L, ISDE.L, and Brent Crude (BZ=F) prices.
 Sends daily summaries and intraday spike/dip alerts via Telegram.
 """
 
@@ -47,11 +47,12 @@ ASSETS = {
         "native_currency": "GBP",
         "unit": "",
     },
-    "hbks": {
-        "ticker": "HBKS.L",
-        "name": "HBKS",
-        "emoji": "📊",
-        "native_currency": "GBP",
+    "isde": {
+        "ticker": "ISDE.L",
+        "name": "ISDE",
+        "emoji": "🌍",
+        # ISDE.L is quoted in USD on the LSE, unlike the pence-quoted ISWD.L
+        "native_currency": "USD",
         "unit": "",
     },
     "brent": {
@@ -63,7 +64,7 @@ ASSETS = {
     },
 }
 
-# LSE tickers that are known to be quoted in pence (not pounds)
+# GBP-quoted LSE tickers may be priced in pence rather than pounds
 # If raw value > 100, assume pence and divide by 100
 PENCE_THRESHOLD = 100
 
@@ -244,9 +245,15 @@ def get_asset_price(
         else:
             prev_close_raw = open_raw
 
-        # Smart pence detection for LSE tickers
-        # If the ticker ends in .L and raw value > 100, it's likely in pence
-        if ticker_symbol.endswith(".L") and current_raw > PENCE_THRESHOLD:
+        # Smart pence detection for GBP-quoted LSE tickers
+        # If the ticker ends in .L and raw value > 100, it's likely in pence.
+        # USD-quoted LSE tickers (e.g. ISDE.L) are never pence, so they are
+        # excluded — otherwise they'd be silently divided by 100 above $100.
+        if (
+            ticker_symbol.endswith(".L")
+            and native_currency == "GBP"
+            and current_raw > PENCE_THRESHOLD
+        ):
             logger.debug(f"{ticker_symbol} raw value {current_raw} > {PENCE_THRESHOLD}, converting from pence to pounds")
             current_raw = current_raw / 100
             open_raw = open_raw / 100

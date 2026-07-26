@@ -5,8 +5,8 @@ Daily Price Tracker — a Python-based investment tracker that sends daily summa
 ## Tracked Assets
 
 - **Gold** (`GC=F`) — USD-native, converted to GBP
-- **ISWD** (`ISWD.L`) — iShares MSCI World Islamic ETF, GBP-native
-- **HBKS** (`HBKS.L`) — HSBC Global Sukuk ETF, GBP-native
+- **ISWD** (`ISWD.L`) — iShares MSCI World Islamic ETF, GBP-native (quoted in pence)
+- **ISDE** (`ISDE.L`) — iShares MSCI EM Islamic ETF, USD-native despite the `.L` suffix
 - **Brent Crude** (`BZ=F`) — USD-native, converted to GBP
 - **GBP/USD** (`GBPUSD=X`) — exchange rate alerts
 

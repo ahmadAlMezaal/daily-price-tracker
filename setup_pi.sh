@@ -75,7 +75,7 @@ if [ "$SKIP_CONFIG" != "true" ]; then
         "thresholds": {
             "gold_gbp": 1.5,
             "iswd": 2.0,
-            "hbks": 2.0
+            "isde": 2.0
         }
     },
     "price_alerts": {
